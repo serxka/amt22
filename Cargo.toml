@@ -1,0 +1,11 @@
+[package]
+name = "amt22"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+embedded-hal = "0.2.7"
+
+[features]
+default = []
+std = []
