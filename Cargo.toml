@@ -2,6 +2,10 @@
 name = "amt22"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "AMT22 Modular Absolute Encoder Rust embedded-hal library"
+keywords = ["embedded-hal", "rust", "amt22"]
+repository = "https://github.com/serxka/amt22"
 
 [dependencies]
 embedded-hal = "0.2.7"
