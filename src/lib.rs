@@ -11,19 +11,29 @@ pub enum Error<E> {
 	Spi(E),
 	/// Checkbit error
 	InvalidChecksum,
+    /// Not a single-turn encoder error
+    NotSingleTurn,
+    /// Not a multi-turn encoder error
+    NotMultiTurn
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolution {
-	Res12Bit,
-	Res14Bit,
+    /// Single-turn 12-bit resolution encoder (AMT22XA)
+	Single12Bit,
+    /// Single-turn 14-bit resolution encoder (AMT22XB)
+	Single14Bit,
+    /// Multi-turn 12-bit resolution encoder (AMT22XC)
+	Multi12Bit,
+    /// Multi-turn 14-bit resolution encoder (AMT22XD)
+	Multi14Bit,
 }
 
 /// A simple interface to the AMT22 Encoders, prefer SPI mode0 and a data rate below 2Mhz (500Khz
 /// works great)
 pub struct Amt22<S> {
 	spi: S,
-	high_res: bool,
+	res: Resolution,
 }
 
 impl<S> Amt22<S> {
@@ -42,19 +52,33 @@ impl<S> Amt22<S> {
 
 	#[inline]
 	fn resolution_shift(&self) -> u16 {
-		match self.high_res {
-			true => 0,
-			false => 2,
+		match self.res {
+			Resolution::Single14Bit | Resolution::Multi14Bit => 0,
+			Resolution::Single12Bit | Resolution::Multi12Bit => 2,
 		}
 	}
 
+    /// Returns how many ticks per rotation of the encoder, this with either be
+    /// `TICKS_PER_ROTATION_12B` or `TICKS_PER_ROTATION_14B` depending on the resolution set.
 	#[inline]
 	pub fn resolution_ticks(&self) -> u16 {
-		match self.high_res {
-			true => Self::TICKS_PER_ROTATION_14B,
-			false => Self::TICKS_PER_ROTATION_12B,
+		match self.res {
+			Resolution::Single14Bit | Resolution::Multi14Bit => Self::TICKS_PER_ROTATION_14B,
+			Resolution::Single12Bit | Resolution::Multi12Bit => Self::TICKS_PER_ROTATION_12B,
 		}
 	}
+
+    /// Is this a single-turn encoder
+	#[inline]
+    pub fn is_single_turn(&self) -> bool {
+        matches!(self.res, Resolution::Single12Bit | Resolution::Single14Bit)
+    }
+
+    /// Is this a multi-turn encoder.
+	#[inline]
+    pub fn is_multi_turn(&self) -> bool {
+        matches!(self.res, Resolution::Multi12Bit | Resolution::Multi14Bit)
+    }
 }
 
 impl<S, E> Amt22<S>
@@ -67,7 +91,7 @@ where
 	pub fn new(spi: S, resolution: Resolution) -> Self {
 		Self {
 			spi,
-			high_res: matches!(resolution, Resolution::Res14Bit),
+			res: resolution,
 		}
 	}
 
@@ -95,11 +119,15 @@ where
 	/// This function is only supported on single-turn encoders.
 	///
 	/// # Errors
-	/// Can return a SPI error on failure.
+	/// Can return a SPI error on failure or mismatched encoder type.
 	pub fn reset_zero_point(
 		&mut self,
 		delay: Option<&mut dyn DelayMs<u16>>,
 	) -> Result<(), Error<E>> {
+        if !self.is_single_turn() {
+            return Err(Error::NotSingleTurn);
+        }
+
 		self.spi.write(&[0x00, 0x70]).map_err(Error::Spi)?;
 		if let Some(delay) = delay {
 			delay.delay_ms(250);
@@ -132,8 +160,12 @@ where
 	/// This function is only supported on multi-turn encoders.
 	///
 	/// # Errors
-	/// Can return a SPI error on failure or a checksum error on failure.
+	/// Can return a SPI error on failure or a checksum error on failure or mismatched encoder type.
 	pub fn read_absolute_position_raw(&mut self) -> Result<(i16, u16), Error<E>> {
+        if !self.is_multi_turn() {
+            return Err(Error::NotMultiTurn);
+        }
+
 		let mut buf = [0x00, 0xA0, 0x00, 0x00];
 		self.spi.transfer(&mut buf).map_err(Error::Spi)?;
 		let position: u16 = ((buf[0] as u16) << 8) | (buf[1] as u16);
@@ -155,14 +187,7 @@ where
 	/// See [`Self::read_absolute_position_raw()`] for other errors and proper use cases.
 	pub fn read_absolute_position(&mut self) -> Result<i32, Error<E>> {
 		let (turns, position) = self.read_absolute_position_raw()?;
-
-		let turns = if turns < 0 {
-			-((turns.abs() as i32 - 1) * self.resolution_ticks() as i32
-				+ (self.resolution_ticks() - position) as i32)
-		} else {
-			turns as i32 * self.resolution_ticks() as i32 + position as i32
-		};
-
+        let turns = turns as i32 * self.resolution_ticks() as i32 + position as i32;
 		Ok(turns)
 	}
 }
